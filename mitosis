@@ -1,0 +1,113 @@
+#!/usr/bin/env zsh
+
+if [[ $1 == --init ]]; then
+    INIT_MITOSIS=1
+    shift
+fi
+
+if [[ $1 == --resume ]]; then
+    MITOSIS_PARTIAL=$2
+    shift 2
+fi
+
+MITOSIS_REPORT=1
+MITOSIS_BACKUP=1
+if [[ $1 == --backup ]]; then
+    unset MITOSIS_REPORT
+    shift
+fi
+if [[ $1 == --report ]]; then
+    unset MITOSIS_BACKUP
+    shift
+fi
+
+CONFIG=/etc/mitosis/$1
+DRY=
+
+[[ -f $CONFIG ]] || { echo "No config file $CONFIG"; exit 1; }
+if grep -v ^SIGIL= $CONFIG | grep -v ^TARGET= | grep -vq ^VOLUMES=; then
+    echo "Invalid config file $CONFIG"
+    exit 1
+fi
+if [[ -f $CONFIG.files ]]; then
+    if [[ -f $CONFIG.include ]]; then
+        echo "Both $CONFIG.files and $CONFIG.include exist; make up your mind"
+        exit 1
+    fi
+    SPEC="--files-from=$CONFIG.files"
+elif [ -f "$CONFIG.include" ]; then
+    SPEC="--include-from=$CONFIG.include"
+else
+    echo "No $CONFIG.files or $CONFIG.include"
+    exit 1
+fi
+
+. $CONFIG
+
+if [[ -n $MITOSIS_PARTIAL ]]; then
+    for VOL in $VOLUMES; do
+        if [[ $MITOSIS_PARTIAL == $VOL/arc/$TARGET/????-??-??.??:??:?? ]]; then
+            VOLUME=$VOL
+            FOUND=$MITOSIS_PARTIAL
+            echo "Resuming partial backup $MITOSIS_PARTIAL"
+            break
+        fi
+    done
+    [[ -d $FOUND ]] || { echo "$MITOSIS_PARTIAL is not a backup." ; exit 1 }
+
+    ARC=`dirname $FOUND`
+    new_backup_date=`basename $FOUND`
+else
+    for VOL in $VOLUMES; do
+        mount | grep -q $VOL && VOLUME=$VOL && break
+        /bin/mount $VOL 2>/dev/null && VOLUME=$VOL && break
+    done
+
+    ARC=$VOLUME/arc/$TARGET
+    [[ -n $MITOSIS_BACKUP ]] && echo "Selected $ARC"
+    new_backup_date=`date +%Y-%m-%d.%H:%M:%S`
+fi
+
+[[ -d $ARC ]] || { echo "No known backup volumes are attached." ; exit 2 }
+
+if [[ -z $INIT_MITOSIS ]]; then
+    [[ -L $ARC/latest ]] || { echo "No 'latest' symlink, what gives?" ; exit 3 }
+    LINK_DEST="--link-dest=$ARC/latest"
+else
+    LINK_DEST=
+fi
+
+if [[ -n $MITOSIS_BACKUP ]]; then
+    echo Backing up to $ARC.
+    maybe_n=
+    [[ -n $DRY ]] && maybe_n=n
+    rsync -rav$maybe_n $SPEC $LINK_DEST / $ARC/${new_backup_date} \
+      || { echo "Ugh, something bad happened in rsync." ; exit 1 }
+
+    echo "Finished backing up."
+
+    if [[ -z $DRY ]]; then
+        if [[ -n $INIT_MITOSIS || -L $ARC/latest ]]; then
+            ln -sTf ${new_backup_date} $ARC/latest
+        else
+            echo "'latest' got messed with during the backup, super not cool."
+        fi
+    fi
+fi
+
+if [[ -n $MITOSIS_REPORT ]]; then
+    df -h $VOLUME
+    echo ""
+fi
+
+if [[ -n $MITOSIS_USAGE ]]; then
+    find $ARC -maxdepth 1 -print0 \
+        | grep -z ....-..-..\\...:..:.. | sort -zr | xargs -0 du -hs
+    echo ""
+fi
+
+if [[ -n $MITOSIS_REPORT ]]; then
+    /usr/bin/eject $VOLUME && echo $VOLUME parked.
+else
+    /bin/umount $VOLUME && echo $VOLUME unmounted.
+fi
