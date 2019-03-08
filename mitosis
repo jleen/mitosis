@@ -59,6 +59,7 @@ if [[ -n $MITOSIS_PARTIAL ]]; then
     new_backup_date=`basename $FOUND`
 else
     for VOL in $VOLUMES; do
+        echo trying $VOL
         mount | grep -q $VOL && VOLUME=$VOL && break
         /bin/mount $VOL 2>/dev/null && VOLUME=$VOL && break
     done
@@ -107,7 +108,9 @@ if [[ -n $MITOSIS_USAGE ]]; then
 fi
 
 if [[ -n $MITOSIS_REPORT ]]; then
-    /usr/bin/eject $VOLUME && echo $VOLUME parked.
+    local EJECT=
+    for x in /usr/bin/eject /sbin/eject; do [[ -x $x ]] && EJECT=$x; done
+    [[ -n $EJECT ]] && $EJECT $VOLUME && echo $VOLUME parked.
 else
     /bin/umount $VOLUME && echo $VOLUME unmounted.
 fi
